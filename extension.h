@@ -7,26 +7,37 @@
 
 class TransmitManager : public SDKExtension, public ISMEntityListener, public IClientListener
 {
-
 public:
-	virtual bool SDK_OnLoad(char *error, size_t maxlength, bool late);
-    virtual void SDK_OnUnload();
-	virtual bool QueryRunning(char* error, size_t maxlength);
-	virtual void NotifyInterfaceDrop(SMInterface* pInterface);
+    bool SDK_OnLoad(char* error, size_t maxlength, bool late) override;
+    void SDK_OnUnload() override;
+    bool SDK_OnMetamodLoad(ISmmAPI* ismm, char* error, size_t maxlength, bool late) override;
+    bool QueryRunning(char* error, size_t maxlength) override;
+    void NotifyInterfaceDrop(SMInterface* pInterface) override;
 
-	virtual void OnEntityDestroyed(CBaseEntity* pEntity);
+    // entity listener
+    void OnEntityDestroyed(CBaseEntity* pEntity) override;
 
-	virtual void OnClientPutInServer(int client);
-	virtual void OnClientDisconnecting(int client);
+    // player listener
+    void OnClientPutInServer(int client) override;
+    void OnClientDisconnecting(int client) override;
 
-	void Hook_SetTransmit(CCheckTransmitInfo* pInfo, bool bAlways);
-
-	void HookEntity(CBaseEntity* pEntity);
+    // method
+    void Hook_SetTransmit(CCheckTransmitInfo* pInfo, bool bAlways);
+    void HookEntity(CBaseEntity* pEntity, bool defaultTransmit);
+    void ResetHooks();
+    void CheckHooks();
 
 private:
-	void UnhookEntity(int index);
+    void UnhookEntity(int index);
+
+    cell_t  m_nOffsetVTable   = 0;
+    ConVar* sv_parallel_send  = nullptr;
+    bool    m_bLastFrameState = false;
 };
 
-inline bool IsEntityIndexInRange(int i) { return i >= 1 && i < MAX_EDICTS; }
+inline bool IsEntityIndexInRange(int i)
+{
+    return i >= 1 && i < MAX_EDICTS;
+}
 
 #endif

@@ -77,13 +77,21 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook.cpp" />
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_hookmangen.cpp" />
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_chookidman.cpp" />
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_chookmaninfo.cpp" />
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_cproto.cpp" />
+    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_cvfnptr.cpp" />
     <ClCompile Include="..\extension.cpp" />
-    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.10\public\smsdk_ext.cpp" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.cpp" />
+    <ClCompile Include="..\hooks.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\extension.h" />
+    <ClInclude Include="..\hooks.h" />
     <ClInclude Include="..\smsdk_config.h" />
-    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.10\public\smsdk_ext.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

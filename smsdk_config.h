@@ -3,7 +3,7 @@
 
 #define SMEXT_CONF_NAME			"Transmit Manager"
 #define SMEXT_CONF_DESCRIPTION	""
-#define SMEXT_CONF_VERSION		"1.1" 
+#define SMEXT_CONF_VERSION "1.2" 
 #define SMEXT_CONF_AUTHOR		"Kyle \"Kxnrl\" Frankiss"
 #define SMEXT_CONF_URL			"https://www.kxnrl.com"
 #define SMEXT_CONF_LOGTAG		"TransmitManager"
@@ -21,8 +21,8 @@
 #define SMEXT_ENABLE_GAMECONF
 //#define SMEXT_ENABLE_MEMUTILS
 #define SMEXT_ENABLE_GAMEHELPERS
-//#define SMEXT_ENABLE_TIMERSYS
-//#define SMEXT_ENABLE_THREADER
+// #define SMEXT_ENABLE_TIMERSYS
+// #define SMEXT_ENABLE_THREADER
 //#define SMEXT_ENABLE_LIBSYS
 //#define SMEXT_ENABLE_MENUS
 //#define SMEXT_ENABLE_ADTFACTORY
