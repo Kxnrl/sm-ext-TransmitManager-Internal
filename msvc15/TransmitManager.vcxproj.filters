@@ -9,20 +9,46 @@
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
-    </Filter>
     <Filter Include="SourceMod SDK">
       <UniqueIdentifier>{31958233-BB2D-4e41-A8F9-CE8A4684F436}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Detour">
+      <UniqueIdentifier>{6d64649b-4425-4c28-a788-b3922566251f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="SourceHook">
+      <UniqueIdentifier>{fa3cadb9-d20f-4698-a9a6-2026e24ed0c2}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\extension.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.10\public\smsdk_ext.cpp">
-      <Filter>SourceMod SDK</Filter>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\asm\asm.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\decode.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detours.cpp">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\itab.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn-att.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn-intel.c">
+      <Filter>Detour</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udis86.c">
+      <Filter>Detour</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -32,8 +58,41 @@
     <ClInclude Include="..\smsdk_config.h">
       <Filter>SourceMod SDK</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.10\public\smsdk_ext.h">
-      <Filter>SourceMod SDK</Filter>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\asm\asm.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\decode.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detourhelpers.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detours.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\extern.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\itab.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\types.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udint.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udis86.h">
+      <Filter>Detour</Filter>
+    </ClInclude>
+    <ClInclude Include="..\macro.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

@@ -55,6 +55,8 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalOptions>/MP /D SE_EPISODEONE=1 /D SE_DARKMESSIAH=2 /D SE_ORANGEBOX=3 /D SE_BLOODYGOODTIME=4 /D SE_EYE=5 /D SE_CSS=6 /D SE_ORANGEBOXVALVE=7 /D SE_LEFT4DEAD=8 /D SE_LEFT4DEAD2=9 /D SE_ALIENSWARM=10 /D SE_PORTAL2=11 /D SE_CSGO=12</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <IgnoreSpecificDefaultLibraries>
@@ -77,19 +79,30 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook.cpp" />
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_hookmangen.cpp" />
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_chookidman.cpp" />
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_chookmaninfo.cpp" />
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_cproto.cpp" />
-    <ClCompile Include="..\..\..\Extension\metamod\metamod-1.11\core\sourcehook\sourcehook_impl_cvfnptr.cpp" />
-    <ClCompile Include="..\extension.cpp" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\asm\asm.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detours.cpp" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\decode.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\itab.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn-att.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn-intel.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn.c" />
+    <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udis86.c" />
     <ClCompile Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.cpp" />
-    <ClCompile Include="..\hooks.cpp" />
+    <ClCompile Include="..\extension.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\asm\asm.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detourhelpers.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\CDetour\detours.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\decode.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\extern.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\itab.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\syn.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\types.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udint.h" />
+    <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\libudis86\udis86.h" />
     <ClInclude Include="..\extension.h" />
-    <ClInclude Include="..\hooks.h" />
+    <ClInclude Include="..\macro.h" />
     <ClInclude Include="..\smsdk_config.h" />
     <ClInclude Include="..\..\..\Extension\sourcemod\sourcemod-1.11\public\smsdk_ext.h" />
   </ItemGroup>

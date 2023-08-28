@@ -1,226 +1,493 @@
 #include "extension.h"
+#include "CDetour/detours.h"
 #include "ISDKHooks.h"
-#include "hooks.h"
+#include "macro.h"
+
+#include <shared_mutex>
+
+// #define DEBUG
+// #define TRACE
+
+constexpr int DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS = 1 << 0;
+constexpr int DEBUG_PROFILER_PRINT_DIFF_THREAD_CALLS = 1 << 1;
+
+constexpr int MAX_CHANNEL = 5;
+
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define CLAMP(x, low, high) (MIN((MAX((x), (low))), (high)))
+#define BOOLEAN(v) (v ? "true" : "false")
+
+#define AssertNullptr(_p) \
+    if (_p == nullptr)    \
+    Error(#_p " is nullptr in %s", __FUNCTION__)
+
+#define AssertMatched(_p1, _p2) \
+    if (_p1 != _p2)             \
+    Error(#_p1 " mismatch with " #_p2 " in %s", __FUNCTION__)
 
 TransmitManager g_Transmit;
 SMEXT_LINK(&g_Transmit);
 
-IGameConfig* g_pGameConf = nullptr;
-ISDKHooks*   g_pSDKHooks = nullptr;
+using read_guard   = std::shared_lock<std::shared_mutex>;
+using write_guard  = std::unique_lock<std::shared_mutex>;
+using thread_guard = std::lock_guard<std::mutex>;
+
+IGameConfig*         g_pGameConf = nullptr;
+ISDKHooks*           g_pSDKHooks = nullptr;
+IServerGameEnts*     g_pGameEnt  = nullptr;
+CGlobalVars*         g_pGlobals  = nullptr;
+std::shared_mutex    g_MutexHooks;
+std::mutex           g_MutexTread;
+int32_t              g_u64EngineThreadId;
+std::atomic<int32_t> g_Counter(0);
+std::atomic<int32_t> g_FrameCalls(0);
+ConVar               sm_transmit_debug_profiler("sm_transmit_debug_profiler", "0", FCVAR_RELEASE, "Enable debug profiler.");
 
 #ifdef DEBUG
-uint64_t g_u64EngineThreadId;
+
+#    define RLOCK                                                                     \
+        Msg("ReadLocking In L%d -> thread = %llu\n", __LINE__, GetCurrentThreadId()); \
+        read_guard lock(g_MutexHooks);                                                \
+        Msg("ReadLock In L%d -> thread = %llu\n", __LINE__, GetCurrentThreadId())
+
+#    define WLOCK                                                                      \
+        Msg("ManuaLocking In L%d -> thread = %llu\n", __LINE__, GetCurrentThreadId()); \
+        write_guard lock(g_MutexHooks);                                                \
+        Msg("ManuaLocked In L%d -> thread = %llu\n", __LINE__, GetCurrentThreadId())
+
+#else
+
+#    define RLOCK \
+        read_guard lock(g_MutexHooks)
+
+#    define WLOCK \
+        write_guard lock(g_MutexHooks)
+
 #endif
 
-SH_DECL_MANUALHOOK2_void(SetTransmit, 0, 0, 0, CCheckTransmitInfo*, bool);
+#define TLOCK \
+    thread_guard tlock(g_MutexTread)
 
-struct HookingEntity {
-    HookingEntity(CBaseEntity* pEntity, bool defaultTransmit)
+class CHook
+{
+public:
+    CHook(CBaseEntity* pEntity, bool defaultTransmit) :
+        m_pEntity(pEntity),
+        m_iEntityIndex(gamehelpers->EntityToBCompatRef(pEntity)),
+        m_nOwnerEntity(-1),
+        m_bDefaultTransmit(defaultTransmit),
+        m_bBlockAll(false),
+        m_pszClassname(V_strdup(gamehelpers->GetEntityClassname(pEntity)))
     {
-        m_bBlockAll        = false;
-        m_bRemoveFlags     = false;
-        m_bDefaultTransmit = defaultTransmit;
-        m_nOwnerEntity     = -1;
-        m_iEntityIndex     = gamehelpers->EntityToBCompatRef(pEntity);
-        m_iHookId          = SH_ADD_MANUALHOOK(
-            SetTransmit, pEntity,
-            SH_MEMBER(&g_Transmit, &TransmitManager::Hook_SetTransmit), false);
-
-        // for css, gotv is 65
-        for (auto i = 1; i <= SM_MAXPLAYERS; i++)
+        // for css, sourceTV is 65
+        for (auto i = 0; i <= SM_MAXPLAYERS; i++)
         {
             // can see by default
-            m_bCanTransmit[i] = defaultTransmit;
+            SetAllChannel(i, defaultTransmit);
         }
 
-        auto* pName = gamehelpers->GetEntityClassname(pEntity);
-        if (pName != nullptr && (V_strcasecmp(pName, "info_particle_system") == 0 || V_strcasecmp(pName, "light_dynamic") == 0 || V_strcasecmp(pName, "env_cascade_light") == 0 || V_strcasecmp(pName, "env_projectedtexture") == 0 || V_strcasecmp(pName, "env_screenoverlay") == 0 || V_strcasecmp(pName, "env_fog_controller") == 0 || V_strcasecmp(pName, "env_lightglow") == 0 || V_strcasecmp(pName, "env_particlesmokegrenade") == 0 || V_strcasecmp(pName, "env_global_light") == 0 || V_strcasecmp(pName, "env_sun") == 0 || V_strcasecmp(pName, "env_sprite") == 0 || V_strcasecmp(pName, "point_camera") == 0 || V_strcasecmp(pName, "point_viewproxy") == 0 || V_strcasecmp(pName, "inferno") == 0 || V_strcasecmp(pName, "sunshine_shadow_control") == 0 || V_strcasecmp(pName, "cfe_player_decal") == 0 || V_strcasecmp(pName, "func_precipitation") == 0 || V_strcasecmp(pName, "cs_ragdoll") == 0 || V_strcasecmp(pName, "info_target") == 0 || V_strncasecmp(pName, "point_viewcontrol", 17) == 0 || V_strncasecmp(pName, "env_fire", 8) == 0 || V_strncasecmp(pName, "color_correction", 16) == 0))
-        {
-            m_bRemoveFlags = true;
+        m_bRemoveFlags = (m_pszClassname != nullptr && (V_strcasecmp(m_pszClassname, "info_particle_system") == 0 || V_strcasecmp(m_pszClassname, "light_dynamic") == 0 || V_strcasecmp(m_pszClassname, "env_cascade_light") == 0 || V_strcasecmp(m_pszClassname, "env_projectedtexture") == 0 || V_strcasecmp(m_pszClassname, "env_screenoverlay") == 0 || V_strcasecmp(m_pszClassname, "env_fog_controller") == 0 || V_strcasecmp(m_pszClassname, "env_lightglow") == 0 || V_strcasecmp(m_pszClassname, "env_particlesmokegrenade") == 0 || V_strcasecmp(m_pszClassname, "env_global_light") == 0 || V_strcasecmp(m_pszClassname, "env_sun") == 0 || V_strcasecmp(m_pszClassname, "env_sprite") == 0 || V_strcasecmp(m_pszClassname, "point_camera") == 0 || V_strcasecmp(m_pszClassname, "point_viewproxy") == 0 || V_strcasecmp(m_pszClassname, "inferno") == 0 || V_strcasecmp(m_pszClassname, "sunshine_shadow_control") == 0 || V_strcasecmp(m_pszClassname, "cfe_player_decal") == 0 || V_strcasecmp(m_pszClassname, "func_precipitation") == 0 || V_strcasecmp(m_pszClassname, "cs_ragdoll") == 0 || V_strcasecmp(m_pszClassname, "info_target") == 0 || V_strncasecmp(m_pszClassname, "point_viewcontrol", 17) == 0 || V_strncasecmp(m_pszClassname, "env_fire", 8) == 0 || V_strncasecmp(m_pszClassname, "color_correction", 16) == 0));
 
-            auto* edict = gamehelpers->EdictOfIndex(m_iEntityIndex);
-            if (edict)
+        CheckFlags(pEntity);
+
+#ifdef TRACE
+        Msg("Construct::%d.%s::(%s) -> m_bRemoveFlags = %s\n", m_iEntityIndex, m_pszClassname, BOOLEAN(defaultTransmit), BOOLEAN(m_bRemoveFlags));
+#endif
+    }
+
+    ~CHook()
+    {
+        delete[] m_pszClassname;
+    }
+
+private:
+    void SetAllChannel(int client, bool v)
+    {
+#ifdef TRACE
+        if (m_iEntityIndex < SM_MAXPLAYERS)
+            Msg("SetAllChannel::%d.%s::(%d, %s)\n", m_iEntityIndex, m_pszClassname, client, BOOLEAN(v));
+#endif
+
+        for (auto c = MAX_CHANNEL; c >= 0; c--)
+        {
+            m_bCanTransmit[client][c] = v;
+        }
+    }
+
+public:
+    [[nodiscard]] bool CanSee(int client) const
+    {
+        if (m_iEntityIndex == client)
+            return true;
+
+        for (auto c = MAX_CHANNEL; c >= 0; c--)
+        {
+            if (!m_bCanTransmit[client][c])
             {
-                const auto flags     = edict->m_fStateFlags;
-                edict->m_fStateFlags = flags & (~FL_EDICT_ALWAYS);
+#ifdef TRACE
+                if (m_iEntityIndex < SM_MAXPLAYERS && playerhelpers->GetGamePlayer(m_iEntityIndex) && playerhelpers->GetGamePlayer(client))
+                    Msg("CanSee[%s] -> [%s] -> channel = %d\n", playerhelpers->GetGamePlayer(m_iEntityIndex)->GetName(), playerhelpers->GetGamePlayer(client)->GetName(), c);
+#endif
+                return false;
             }
         }
+
+        return true;
     }
 
-    ~HookingEntity()
+    void SetSee(int client, bool can, int channel)
     {
-        if (m_iHookId)
+#ifdef TRACE
+        if (m_iEntityIndex < SM_MAXPLAYERS)
+            Msg("SetSee::%d.%s::(%d, %s, %d)\n", m_iEntityIndex, m_pszClassname, client, BOOLEAN(can), channel);
+#endif
+        if (channel == -1)
         {
-            SH_REMOVE_HOOK_ID(m_iHookId);
-            m_iHookId = 0;
-        }
-    }
-
-    bool CanSee(int client) const
-    {
-        // remove self bypass
-        if (m_iEntityIndex == client)
-        {
-            // self or children
-            return true;
+            SetAllChannel(client, can);
+            return;
         }
 
-        return m_bCanTransmit[client];
+        const auto c              = CLAMP(channel, 0, MAX_CHANNEL);
+        m_bCanTransmit[client][c] = can;
     }
 
-    void SetSee(int client, bool can)
+    [[nodiscard]] bool GetState(int client, int channel) const
     {
-        m_bCanTransmit[client] = can;
+        return m_bCanTransmit[client][channel];
     }
 
     void SetDefault(int client)
     {
-        m_bCanTransmit[client] = m_bDefaultTransmit;
+#ifdef TRACE
+        if (m_iEntityIndex < SM_MAXPLAYERS)
+            Msg("SetDefault::%d.%s::(%d)\n", client);
+#endif
+        SetAllChannel(client, m_bDefaultTransmit);
     }
 
-    int GetOwner() const
+    [[nodiscard]] int GetOwner() const
     {
         return m_nOwnerEntity;
     }
 
     void SetOwner(int owner)
     {
+#ifdef TRACE
+        if (m_iEntityIndex < SM_MAXPLAYERS)
+            Msg("SetOwner::%d.%s::(%d)\n", m_iEntityIndex, m_pszClassname, owner);
+#endif
         m_nOwnerEntity = owner;
     }
 
-    bool ShouldRemove() const
+    void CheckFlags(const CBaseEntity* pSource) const
     {
-        return m_bRemoveFlags;
-    }
+        AssertMatched(m_pEntity, pSource);
 
-    void SetBlockAll(bool state)
-    {
-        m_bBlockAll = state;
-    }
-
-    bool GetBlockAll() const
-    {
-        return m_bBlockAll;
-    }
-
-private:
-    int  m_iHookId;
-    int  m_iEntityIndex;
-    bool m_bCanTransmit[SM_MAXPLAYERS + 1];
-    int  m_nOwnerEntity;
-    bool m_bRemoveFlags;
-    bool m_bDefaultTransmit;
-    bool m_bBlockAll;
-};
-
-HookingEntity* g_Hooked[MAX_EDICTS];
-
-void OnGameFrame(bool simulating)
-{
-    g_Transmit.CheckHooks();
-}
-
-void TransmitManager::Hook_SetTransmit(CCheckTransmitInfo* pInfo,
-                                       bool                bAlways)
-{
-#ifdef DEBUG
-    const uint64_t threadId = GetCurrentThreadId();
-    if (threadId != g_u64EngineThreadId)
-        Msg("Hook_SetTransmit(%p, %p, %s) at %" PRIu64 " :: %" PRIu64 " \n", META_IFACEPTR(CBaseEntity), pInfo, bAlways ? "true" : "false", threadId, g_u64EngineThreadId);
-#endif
-
-    const auto entity = gamehelpers->EntityToBCompatRef(META_IFACEPTR(CBaseEntity));
-    const auto client = gamehelpers->IndexOfEdict(pInfo->m_pClientEnt);
-
-    if (!IsEntityIndexInRange(entity) || client == entity)
-    {
-        RETURN_META(MRES_IGNORED);
-    }
-
-    if (g_Hooked[entity] == nullptr)
-    {
-        smutils->LogError(myself, "Why Hooked Entity is nullptr <%d.%s>",
-                          entity, gamehelpers->GetEntityClassname(META_IFACEPTR(CBaseEntity)));
-        RETURN_META(MRES_IGNORED);
-    }
-
-    if (g_Hooked[entity]->ShouldRemove())
-    {
-        const auto pEdict = gamehelpers->EdictOfIndex(entity);
+        const auto pEdict = g_pGameEnt->BaseEntityToEdict(m_pEntity);
+        // const auto pEdict = gamehelpers->EdictOfIndex(m_iEntityIndex);
         if (!pEdict || pEdict->IsFree())
         {
-            RETURN_META(MRES_IGNORED);
+            smutils->LogError(myself, "Why Hooked Entity / edict is nullptr <%d.%s>", m_iEntityIndex, m_pszClassname);
+            return;
         }
 
         const auto flags = pEdict->m_fStateFlags;
         if (flags & FL_EDICT_ALWAYS)
         {
+#ifdef TRACE
+            Msg("%d.%s should remove flags %d\n", m_iEntityIndex, m_pszClassname, flags);
+#endif
             pEdict->m_fStateFlags = (flags ^ FL_EDICT_ALWAYS);
         }
     }
 
-    // if we need block it with owner stats = transmit
-    if (!g_Hooked[entity]->CanSee(client))
+    void SetBlockAll(bool state)
     {
-        // blocked
-        RETURN_META(MRES_SUPERCEDE);
+#ifdef TRACE
+        if (m_iEntityIndex < SM_MAXPLAYERS)
+            Msg("SetBlockAll::%d.%s::(%s)\n", m_iEntityIndex, m_pszClassname, BOOLEAN(state));
+#endif
+        m_bBlockAll = state;
     }
 
-    const auto owner = g_Hooked[entity]->GetOwner();
-    if (owner == client)
+    [[nodiscard]] bool GetBlockAll() const
     {
-        // don't block children
+        return m_bBlockAll;
+    }
+
+private:
+    CBaseEntity* m_pEntity = nullptr;
+    int          m_iEntityIndex;
+    bool         m_bCanTransmit[SM_MAXPLAYERS + 1][MAX_CHANNEL + 1];
+    int          m_nOwnerEntity;
+    bool         m_bRemoveFlags;
+    bool         m_bDefaultTransmit;
+    bool         m_bBlockAll;
+    const char*  m_pszClassname = nullptr;
+};
+
+CHook* g_pHooks[MAX_EDICTS];
+int32  g_nHooks[MAX_EDICTS];
+
+#ifdef PLATFORM_WINDOWS
+void(__stdcall* DETOUR_CheckTransmit_Actual)(CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts) = nullptr;
+void __stdcall DETOUR_CheckTransmit(CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts)
+#else
+DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, const unsigned short*, pEdictIndices, int, nEdicts)
+#endif
+{
+#ifdef PLATFORM_WINDOWS
+#    define CALL_CHECK \
+        DETOUR_CheckTransmit_Actual(pInfo, pEdictIndices, nEdicts)
+#else
+#    define CALL_CHECK                           \
+        DETOUR_MEMBER_CALL(DETOUR_CheckTransmit) \
+        (pInfo, pEdictIndices, nEdicts)
+
+#endif
+
+    // NOTE why?
+    // 我不知道为什么Parallel是把pClient随机分配到ThreadPool里面,
+    // 而不是用ThreadPool来跑所有的Client,
+    // 这导致同一个pSnapshot里面,
+    // 可能玩家A走的是thread 1, 而玩家B走的thread 2
+    // 这里存在并发资源竞争问题,
+    // 如果使用SOURCEHOOK会导致GlobalPtr争抢
+    // 必须要加锁.
+    // 否则使用DETOUR方式!
+
+    const int32_t threadId = ThreadGetCurrentId();
+    g_Counter              = 0;
+
+    AssertNullptr(pInfo->m_pClientEnt);
+
+    TLOCK;
+    RLOCK;
+
+    CALL_CHECK;
+
+    if (threadId == g_u64EngineThreadId)
+    {
+        ++g_FrameCalls;
+    }
+    else if (sm_transmit_debug_profiler.GetInt() & DEBUG_PROFILER_PRINT_DIFF_THREAD_CALLS)
+    {
+        Msg("CheckTransmit(%02d) -> call (%04d) in mainThread = %08d | currentThread = %08d\n",
+            playerhelpers->GetGamePlayer(pInfo->m_pClientEnt)->GetIndex(),
+            g_Counter.load(),
+            g_u64EngineThreadId,
+            threadId);
+    }
+
+#ifdef POST_CHECK_HOOK
+    const auto client = gamehelpers->IndexOfEdict(pInfo->m_pClientEnt);
+
+    edict_t* pBaseEdict = g_pGlobals->pEdicts;
+
+    for (auto i = 0; i < nEdicts; i++)
+    {
+        const auto index  = pEdictIndices[i];
+        const auto pEdict = &pBaseEdict[index];
+
+        if (pEdict->m_fStateFlags & 1 << 4) // FL_EDICT_DONTSEND
+        {
+            continue;
+        }
+
+        if (!pInfo->m_pTransmitEdict->Get(index))
+        {
+            continue;
+        }
+
+        const auto pEntity = g_pGameEnt->EdictToBaseEntity(pEdict);
+        const auto entity  = gamehelpers->EntityToBCompatRef(pEntity);
+
+        if (!IsEntityIndexInRange(entity))
+        {
+            continue;
+        }
+
+        if (g_pHooks[entity] == nullptr)
+        {
+            continue;
+        }
+
+        if (!g_pHooks[entity]->CanSee(client))
+        {
+            if (pInfo->m_pTransmitEdict->Get(index))
+                pInfo->m_pTransmitEdict->Clear(index);
+            continue;
+        }
+
+        const auto owner = g_pHooks[entity]->GetOwner();
+        if (client == owner)
+        {
+            continue;
+        }
+
+        if (g_pHooks[entity]->GetBlockAll())
+        {
+            if (pInfo->m_pTransmitEdict->Get(index))
+                pInfo->m_pTransmitEdict->Clear(index);
+            continue;
+        }
+
+        if (owner != -1 && g_pHooks[owner] != nullptr && !g_pHooks[owner]->CanSee(client))
+        {
+            if (pInfo->m_pTransmitEdict->Get(index))
+                pInfo->m_pTransmitEdict->Clear(index);
+            continue;
+        }
+
+        // passing
+    }
+#endif
+}
+
+#ifdef DETOUR_TRANSMIT
+DECL_TRANSMIT_DETOUR(1)
+DECL_TRANSMIT_DETOUR(2)
+DECL_TRANSMIT_DETOUR(3)
+DECL_TRANSMIT_DETOUR(4)
+DECL_TRANSMIT_DETOUR(5)
+#endif
+
+SH_DECL_MANUALHOOK2_void(SetTransmit, 0, 0, 0, CCheckTransmitInfo*, bool);
+
+void Hook_SetTransmit(CCheckTransmitInfo* pInfo, bool bAlways)
+{
+    ++g_Counter;
+
+    // probably double lock in sync mode
+    RLOCK;
+
+    const auto pEntity = META_IFACEPTR(CBaseEntity);
+    const auto entity  = gamehelpers->EntityToBCompatRef(pEntity);
+
+    if (!IsEntityIndexInRange(entity) || g_pHooks[entity] == nullptr)
+    {
         RETURN_META(MRES_IGNORED);
     }
 
-    // if entity shouldn't transmit for others
-    if (g_Hooked[entity]->GetBlockAll())
+    g_pHooks[entity]->CheckFlags(pEntity);
+
+    const auto client = gamehelpers->IndexOfEdict(pInfo->m_pClientEnt);
+    if (client == -1)
     {
-        // blocked
+        RETURN_META(MRES_IGNORED);
+    }
+
+    if (!g_pHooks[entity]->CanSee(client))
+    {
         RETURN_META(MRES_SUPERCEDE);
     }
 
-    if (IsEntityIndexInRange(owner) && g_Hooked[owner] != nullptr && !g_Hooked[owner]->CanSee(client))
+    const auto owner = g_pHooks[entity]->GetOwner();
+    if (owner == client)
     {
-        // blocked
+        RETURN_META(MRES_IGNORED);
+    }
+
+    if (g_pHooks[entity]->GetBlockAll())
+    {
         RETURN_META(MRES_SUPERCEDE);
     }
 
-    // META_CONPRINTF("Hook_SetTransmit-> %d | %d | %d | %s\n", entity, owner,
-    // client, g_Hooked[entity]->CanSee(client) ? "true" : "false");
+    if (owner != -1 && g_pHooks[owner] != nullptr && !g_pHooks[owner]->CanSee(client))
+    {
+        RETURN_META(MRES_SUPERCEDE);
+    }
 
     RETURN_META(MRES_IGNORED);
 }
 
+void OnGameFrame(bool simulating)
+{
+    if (g_FrameCalls.load() > 0 && sm_transmit_debug_profiler.GetInt() & DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS && g_FrameCalls.load() > playerhelpers->GetNumPlayers() / 2)
+        Msg("Called in main thread: %d times with %d players\n", g_FrameCalls.load(), playerhelpers->GetNumPlayers());
+
+    g_FrameCalls = 0;
+
+    g_Transmit.CheckParallel();
+}
+
 bool TransmitManager::SDK_OnMetamodLoad(ISmmAPI* ismm, char* error, size_t maxlen, bool late)
 {
-    g_OriginalSourceHook = g_SHPtr;
     GET_V_IFACE_CURRENT(GetEngineFactory, g_pCVar, ICvar, CVAR_INTERFACE_VERSION);
+    GET_V_IFACE_CURRENT(GetServerFactory, g_pGameEnt, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
+
+    g_pGlobals = ismm->GetCGlobals();
+    ConVar_Register(0, this);
+
     return true;
+}
+
+bool TransmitManager::RegisterConCommandBase(ConCommandBase* pVar)
+{
+    return META_REGCVAR(pVar);
 }
 
 bool TransmitManager::SDK_OnLoad(char* error, size_t maxlength, bool late)
 {
-#ifdef DEBUG
-    g_u64EngineThreadId = GetCurrentThreadId();
-#endif
+    g_u64EngineThreadId = ThreadGetCurrentId();
 
     sharesys->AddDependency(myself, "sdkhooks.ext", true, true);
     SM_GET_IFACE(SDKHOOKS, g_pSDKHooks);
 
-    if (!gameconfs->LoadGameConfigFile("sdkhooks.games", &g_pGameConf, error, maxlength))
+    if (!gameconfs->LoadGameConfigFile("transmit.games", &g_pGameConf, error, maxlength))
     {
-        smutils->Format(error, maxlength, "Failed to load SDKHooks gamedata.");
+        smutils->Format(error, maxlength, "Failed to load Transmit GameData.");
+        return false;
+    }
+
+    IGameConfig* conf;
+    if (!gameconfs->LoadGameConfigFile("sdkhooks.games", &conf, error, maxlength))
+    {
+        smutils->Format(error, maxlength, "Failed to load SDKHooks GameData.");
         return false;
     }
 
     auto offset = -1;
-    if (!g_pGameConf->GetOffset("SetTransmit", &offset))
+    if (!conf->GetOffset("SetTransmit", &offset))
     {
+        gameconfs->CloseGameConfigFile(conf);
         smutils->Format(error, maxlength, "Failed to load 'SetTransmit' offset.");
         return false;
     }
-    m_nOffsetVTable = offset;
+    gameconfs->CloseGameConfigFile(conf);
+    SH_MANUALHOOK_RECONFIGURE(SetTransmit, offset, 0, 0);
+
+    CDetourManager::Init(smutils->GetScriptingEngine(), g_pGameConf);
+
+    // CServerGameEnts::CheckTransmit
+    m_pDetour[0] =
+#ifdef PLATFORM_WINDOWS
+        DETOUR_CREATE_STATIC(DETOUR_CheckTransmit, "CServerGameEnts::CheckTransmit");
+#else
+        DETOUR_CREATE_MEMBER(DETOUR_CheckTransmit, "CServerGameEnts::CheckTransmit");
+#endif
+    if (m_pDetour[0] == nullptr)
+    {
+        smutils->Format(error, maxlength, "Detour<%s> is nullptr", "CServerGameEnts::CheckTransmit");
+        return false;
+    }
+
+#ifdef DETOUR_TRANSMIT
+
+#    define CREATE_TRANSMIT_DETOUR(n)                                                                               \
+        m_pDetour[n] = DETOUR_CREATE_MEMBER(DETOUR_SetTransmit##n, "SetTransmit::" #n) if (m_pDetour[n] == nullptr) \
+            Error("Detour<%s> is nullptr", "SetTransmit::" #n);                                                     \
+        m_pDetour[n]->EnableDetour()
+
+    CREATE_TRANSMIT_DETOUR(1);
+    CREATE_TRANSMIT_DETOUR(2);
+    CREATE_TRANSMIT_DETOUR(3);
+    CREATE_TRANSMIT_DETOUR(4);
+    CREATE_TRANSMIT_DETOUR(5);
+#endif
+
+    memset(g_nHooks, 0, sizeof(g_nHooks));
 
     playerhelpers->AddClientListener(this);
     g_pSDKHooks->AddEntityListener(this);
@@ -232,57 +499,66 @@ bool TransmitManager::SDK_OnLoad(char* error, size_t maxlength, bool late)
     sv_parallel_send = g_pCVar->FindVar("sv_parallel_send");
     if (sv_parallel_send != nullptr)
     {
-        m_bLastFrameState = sv_parallel_send->GetBool();
-
-        g_SHPtr = g_ParallelSourceHook;
-
-        smutils->LogMessage(myself, "Source Hook initialized as parallel mode!");
+        m_bParallel = sv_parallel_send->GetBool();
     }
 
-    ResetHooks();
+    if (m_bParallel)
+    {
+        m_pDetour[0]->EnableDetour();
+        smutils->LogMessage(myself, "Initialized as parallel mode <thread-%d>!", g_u64EngineThreadId);
+
+#if PLATFORM_WINDOWS
+        const auto pThread  = GetCurrentThread();
+        const auto priority = GetThreadPriority(pThread);
+        if (SetThreadPriority(pThread, THREAD_PRIORITY_TIME_CRITICAL))
+            smutils->LogMessage(myself, "Increased main thread to %d from %d", THREAD_PRIORITY_TIME_CRITICAL, priority);
+#endif
+    }
+    else
+    {
+        smutils->LogMessage(myself, "Initialized as synchronization mode!");
+    }
+    m_bDelayDetourDisable = false;
 
     smutils->AddGameFrameHook(&OnGameFrame);
 
     return true;
 }
 
-void TransmitManager::ResetHooks()
+void TransmitManager::CheckParallel()
 {
-    for (auto i = 0; i < MAX_EDICTS; i++)
-    {
-        if (g_Hooked[i] != nullptr)
-        {
-            delete g_Hooked[i];
-        }
-        g_Hooked[i] = nullptr;
-    }
-
-    SH_MANUALHOOK_RECONFIGURE(SetTransmit, m_nOffsetVTable, 0, 0);
-}
-
-void TransmitManager::CheckHooks()
-{
-    if (sv_parallel_send == nullptr || sv_parallel_send->GetBool() == m_bLastFrameState)
+    if (sv_parallel_send == nullptr)
         return;
 
-    m_bLastFrameState = sv_parallel_send->GetBool();
+    TLOCK;
 
-    // remove all hooks
-    ResetHooks();
+    const auto bParallel = sv_parallel_send->GetBool();
 
-    if (sv_parallel_send->GetBool())
+    if (bParallel != m_bParallel)
+        smutils->LogMessage(myself, "switch to %s mode!", bParallel ? "parallel" : "synchronization");
+
+    m_bParallel = bParallel;
+
+    if (!m_bParallel && m_pDetour[0]->IsEnabled())
     {
-        g_SHPtr = g_ParallelSourceHook;
+        // NOTE Later disable
+        // If disable function while multi-threading executing
+        // server crash instantly.
+        m_bDelayDetourDisable = true;
     }
-    else
+    else if (m_bParallel && !m_pDetour[0]->IsEnabled())
     {
-        g_SHPtr = g_OriginalSourceHook;
+        m_pDetour[0]->EnableDetour();
     }
 
-    // configure new hooks
-    ResetHooks();
+    if (m_bParallel)
+        m_bDelayDetourDisable = false;
+}
 
-    smutils->LogMessage(myself, "sv_parallel_send state changed! current: %s", sv_parallel_send->GetBool() ? "true" : "false");
+void TransmitManager::OnCoreMapEnd()
+{
+    g_Counter    = 0;
+    g_FrameCalls = 0;
 }
 
 void TransmitManager::NotifyInterfaceDrop(SMInterface* pInterface)
@@ -302,25 +578,37 @@ bool TransmitManager::QueryRunning(char* error, size_t maxlength)
 void TransmitManager::SDK_OnUnload()
 {
     playerhelpers->RemoveClientListener(this);
+    gameconfs->CloseGameConfigFile(g_pGameConf);
 
     // I don't know why SDKHooks dropped first.
     if (g_pSDKHooks != nullptr)
-    {
         g_pSDKHooks->RemoveEntityListener(this);
+
+    for (const auto& detour : m_pDetour)
+    {
+        if (detour)
+            detour->Destroy();
     }
 
-    for (auto i = 0; i < MAX_EDICTS; i++)
+    WLOCK;
+
+    for (const auto& hook : g_pHooks)
     {
-        if (g_Hooked[i] != nullptr)
+        delete hook;
+    }
+    for (auto& hook : g_nHooks)
+    {
+        if (hook)
         {
-            delete g_Hooked[i];
+            SH_REMOVE_HOOK_ID(hook);
         }
+        hook = 0;
     }
 }
 
 void TransmitManager::OnEntityDestroyed(CBaseEntity* pEntity)
 {
-    auto entity = gamehelpers->EntityToBCompatRef(pEntity);
+    const auto entity = gamehelpers->EntityToBCompatRef(pEntity);
 
     if ((unsigned)entity == INVALID_EHANDLE_INDEX || (entity > 0 && entity <= playerhelpers->GetMaxClients()))
     {
@@ -339,38 +627,52 @@ void TransmitManager::OnEntityDestroyed(CBaseEntity* pEntity)
 
 void TransmitManager::OnClientPutInServer(int client)
 {
-    const auto pPlayer = playerhelpers->GetGamePlayer(client);
-    if (!pPlayer || pPlayer->IsSourceTV() || pPlayer->IsReplay())
-    {
-        return;
-    }
+    WLOCK;
 
     for (auto i = 1; i < MAX_EDICTS; i++)
     {
-        if (g_Hooked[i] == nullptr)
+        if (g_pHooks[i] == nullptr)
         {
             // not being hook
             continue;
         }
 
-        g_Hooked[i]->SetDefault(client);
+        g_pHooks[i]->SetDefault(client);
     }
 }
 
 void TransmitManager::OnClientDisconnecting(int client)
 {
-    const auto pPlayer = playerhelpers->GetGamePlayer(client);
-    if (!pPlayer || pPlayer->IsSourceTV() || pPlayer->IsReplay() || !pPlayer->IsInGame())
+    UnhookEntity(client);
+}
+
+void TransmitManager::OnClientDisconnected(int client)
+{
+    if (!m_bDelayDetourDisable)
+        return;
+
+    // check if no any client connected
+
+    for (auto i = 1; i <= playerhelpers->GetMaxClients(); i++)
     {
-        // not in-game = no hook
+        const auto pPlayer = playerhelpers->GetGamePlayer(i);
+        if (pPlayer == nullptr || !pPlayer->IsInGame())
+            continue;
+
+        // found in-game client
         return;
     }
 
-    UnhookEntity(client);
+    if (m_pDetour[0]->IsEnabled())
+        m_pDetour[0]->DisableDetour();
+
+    m_bDelayDetourDisable = false;
 }
 
 void TransmitManager::HookEntity(CBaseEntity* pEntity, bool defaultTransmit)
 {
+    // NOTE lock is not needed because call from native only!!!
+
     auto index = gamehelpers->EntityToBCompatRef(pEntity);
 
     if (!IsEntityIndexInRange(index))
@@ -380,35 +682,51 @@ void TransmitManager::HookEntity(CBaseEntity* pEntity, bool defaultTransmit)
         return;
     }
 
-    if (g_Hooked[index] != nullptr)
+    if (g_pHooks[index] != nullptr)
     {
-        // smutils->LogError(myself, "Entity Hook listener [%d] is not nullptr. Try to remove.", index);
-        // delete g_Hooked[index];
+        smutils->LogError(myself, "Entity Hook listener [%d] is not nullptr.", index);
+        return;
     }
 
-    g_Hooked[index] = new HookingEntity(pEntity, defaultTransmit);
-    // smutils->LogMessage(myself, "Hooked entity %d", index);
+    g_pHooks[index] = new CHook(pEntity, defaultTransmit);
+    g_nHooks[index] = SH_ADD_MANUALHOOK(SetTransmit, pEntity, SH_STATIC(&Hook_SetTransmit), false);
+
+#ifdef TRACE
+    Msg("Hooked Entity (%d, %s)\n", index, BOOLEAN(defaultTransmit));
+#endif
+
+#ifdef DEBUG
+    smutils->LogMessage(myself, "Hooked entity %d", index);
+#endif
 }
 
 void TransmitManager::UnhookEntity(int index)
 {
-    if (!IsEntityIndexInRange(index))
-    {
-        // out-of-range
-        smutils->LogError(myself, "Failed to unhook entity %d -> out-of-range.", index);
-        return;
-    }
+    WLOCK;
 
-    if (g_Hooked[index] == nullptr)
+    if (g_pHooks[index] == nullptr)
     {
         // smutils->LogError(myself, "Entity Hook listener %d is nullptr.
         // Skipped.", index);
         return;
     }
 
-    delete g_Hooked[index];
-    g_Hooked[index] = nullptr;
-    // smutils->LogMessage(myself, "Unhooked entity %d", index);
+    delete g_pHooks[index];
+    g_pHooks[index] = nullptr;
+
+    if (g_nHooks[index])
+    {
+        SH_REMOVE_HOOK_ID(g_nHooks[index]);
+    }
+    g_nHooks[index] = 0;
+
+#ifdef TRACE
+    Msg("UnHooked Entity(%d)\n", index);
+#endif
+
+#ifdef DEBUG
+    smutils->LogMessage(myself, "Unhooked entity %d", index);
+#endif
 }
 
 static cell_t Native_SetEntityOwner(IPluginContext* pContext, const cell_t* params)
@@ -419,13 +737,15 @@ static cell_t Native_SetEntityOwner(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is out-of-range.", params[1]);
     }
 
-    if (g_Hooked[params[1]] != nullptr)
+    WLOCK;
+
+    if (g_pHooks[params[1]] != nullptr)
     {
-        g_Hooked[params[1]]->SetOwner(params[2]);
+        g_pHooks[params[1]]->SetOwner(params[2]);
         return true;
     }
 
-    if (params[1] >= 1 && params[1] < playerhelpers->GetMaxClients())
+    if (params[1] >= 1 && params[1] <= playerhelpers->GetMaxClients())
     {
         smutils->LogError(myself, "Entity %d is not being hook.", params[1]);
         return false;
@@ -448,16 +768,21 @@ static cell_t Native_SetEntityState(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Client %d is invalid.", params[2]);
     }
 
-    if (g_Hooked[params[1]] != nullptr)
-    {
-        g_Hooked[params[1]]->SetSee(params[2], params[3]);
-        return true;
-    }
+    WLOCK;
 
-    if (params[1] >= 1 && params[1] < playerhelpers->GetMaxClients())
+    // 1 = entity
+    // 2 = client
+    // 3 = state
+    // 4 = channel
+
+    auto channel = 0;
+    if (params[0] >= 4)
+        channel = params[4];
+
+    if (g_pHooks[params[1]] != nullptr)
     {
-        smutils->LogError(myself, "Entity %d is not being hook.", params[1]);
-        return false;
+        g_pHooks[params[1]]->SetSee(params[2], !!params[3], channel);
+        return true;
     }
 
     return pContext->ThrowNativeError("Entity %d is not being hook.", params[1]);
@@ -478,9 +803,11 @@ static cell_t Native_AddEntityHooks(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is invalid.", params[1]);
     }
 
-    bool defaultTransmit = true;
+    auto defaultTransmit = true;
     if (params[0] >= 2)
         defaultTransmit = !!params[2];
+
+    WLOCK;
 
     g_Transmit.HookEntity(pEntity, defaultTransmit);
 
@@ -497,17 +824,14 @@ static cell_t Native_RemoveEntHooks(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is out-of-range.", index);
     }
 
-    auto* pEntity = gamehelpers->ReferenceToEntity(index);
+    const auto pEntity = gamehelpers->ReferenceToEntity(index);
     if (!pEntity)
     {
         // nuull
         return pContext->ThrowNativeError("Entity %d is invalid.", index);
     }
 
-    if (g_Hooked[index] != nullptr)
-    {
-        delete g_Hooked[index];
-    }
+    g_Transmit.UnhookEntity(index);
 
     return 0;
 }
@@ -526,13 +850,22 @@ static cell_t Native_GetEntityState(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Client %d is invalid.", params[2]);
     }
 
-    if (g_Hooked[params[1]] == nullptr)
+    RLOCK;
+
+    if (g_pHooks[params[1]] == nullptr)
     {
         // can see
-        return true;
+        return pContext->ThrowNativeError("Entity %d is not being hook!", params[1]);
     }
 
-    return g_Hooked[params[1]]->CanSee(params[2]);
+    if (params[0] < 3)
+        return g_pHooks[params[1]]->CanSee(params[2]);
+
+    const auto channel = params[3];
+    if (channel == -1)
+        return g_pHooks[params[1]]->CanSee(params[2]);
+
+    return g_pHooks[params[1]]->GetState(params[2], CLAMP(channel, 0, MAX_CHANNEL));
 }
 
 static cell_t Native_GetEntityBlock(IPluginContext* pContext, const cell_t* params)
@@ -543,13 +876,15 @@ static cell_t Native_GetEntityBlock(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is out-of-range.", params[1]);
     }
 
-    if (g_Hooked[params[1]] == nullptr)
+    RLOCK;
+
+    if (g_pHooks[params[1]] == nullptr)
     {
         // can see
         return false;
     }
 
-    return g_Hooked[params[1]]->GetBlockAll();
+    return g_pHooks[params[1]]->GetBlockAll();
 }
 
 static cell_t Native_SetEntityBlock(IPluginContext* pContext, const cell_t* params)
@@ -560,13 +895,15 @@ static cell_t Native_SetEntityBlock(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is out-of-range.", params[1]);
     }
 
-    if (g_Hooked[params[1]] == nullptr)
+    WLOCK;
+
+    if (g_pHooks[params[1]] == nullptr)
     {
         // can see
         return false;
     }
 
-    g_Hooked[params[1]]->SetBlockAll(!!params[2]);
+    g_pHooks[params[1]]->SetBlockAll(!!params[2]);
     return true;
 }
 
@@ -578,7 +915,9 @@ static cell_t Native_IsEntityHooked(IPluginContext* pContext, const cell_t* para
         return pContext->ThrowNativeError("Entity %d is out-of-range.", params[1]);
     }
 
-    return g_Hooked[params[1]] != nullptr;
+    RLOCK;
+
+    return g_pHooks[params[1]] != nullptr;
 }
 
 sp_nativeinfo_t g_Natives[] = {
