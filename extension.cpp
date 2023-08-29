@@ -1,4 +1,4 @@
-#include "extension.h"
+ï»¿#include "extension.h"
 #include "CDetour/detours.h"
 #include "ISDKHooks.h"
 #include "macro.h"
@@ -7,9 +7,13 @@
 
 // #define DEBUG
 // #define TRACE
+// #define SHOOK
+#define POST_CHECK_HOOK
 
-constexpr int DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS = 1 << 0;
-constexpr int DEBUG_PROFILER_PRINT_DIFF_THREAD_CALLS = 1 << 1;
+constexpr int DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS    = 1 << 0;
+constexpr int DEBUG_PROFILER_PRINT_DIFF_THREAD_CALLS    = 1 << 1;
+constexpr int DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_TIME = 1 << 2;
+constexpr int DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_LOGS = 1 << 3;
 
 constexpr int MAX_CHANNEL = 5;
 
@@ -228,7 +232,14 @@ private:
 };
 
 CHook* g_pHooks[MAX_EDICTS];
-int32  g_nHooks[MAX_EDICTS];
+
+#ifdef SHOOK
+int32 g_nHooks[MAX_EDICTS];
+#endif
+
+#ifdef POST_CHECK_HOOK
+inline bool CheckEntityRelationShip(CBaseEntity* pEntity, int entity, int client, int debugFlags);
+#endif
 
 #ifdef PLATFORM_WINDOWS
 void(__stdcall* DETOUR_CheckTransmit_Actual)(CCheckTransmitInfo* pInfo, const unsigned short* pEdictIndices, int nEdicts) = nullptr;
@@ -248,22 +259,29 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
 #endif
 
     // NOTE why?
-    // ÎÒ²»ÖªµÀÎªÊ²Ã´ParallelÊÇ°ÑpClientËæ»ú·ÖÅäµ½ThreadPoolÀïÃæ,
-    // ¶ø²»ÊÇÓÃThreadPoolÀ´ÅÜËùÓÐµÄClient,
-    // Õâµ¼ÖÂÍ¬Ò»¸öpSnapshotÀïÃæ,
-    // ¿ÉÄÜÍæ¼ÒA×ßµÄÊÇthread 1, ¶øÍæ¼ÒB×ßµÄthread 2
-    // ÕâÀï´æÔÚ²¢·¢×ÊÔ´¾ºÕùÎÊÌâ,
-    // Èç¹ûÊ¹ÓÃSOURCEHOOK»áµ¼ÖÂGlobalPtrÕùÇÀ
-    // ±ØÐëÒª¼ÓËø.
-    // ·ñÔòÊ¹ÓÃDETOUR·½Ê½!
+    // æˆ‘ä¸çŸ¥é“ä¸ºä»€ä¹ˆParallelæ˜¯æŠŠpClientéšæœºåˆ†é…åˆ°ThreadPoolé‡Œé¢,
+    // è€Œä¸æ˜¯ç”¨ThreadPoolæ¥è·‘æ‰€æœ‰çš„Client,
+    // è¿™å¯¼è‡´åŒä¸€ä¸ªpSnapshoté‡Œé¢,
+    // å¯èƒ½çŽ©å®¶Aèµ°çš„æ˜¯thread 1, è€ŒçŽ©å®¶Bèµ°çš„thread 2
+    // è¿™é‡Œå­˜åœ¨å¹¶å‘èµ„æºç«žäº‰é—®é¢˜,
+    // å¦‚æžœä½¿ç”¨SOURCEHOOKä¼šå¯¼è‡´GlobalPträº‰æŠ¢
+    // å¿…é¡»è¦åŠ é”.
+    // å¦åˆ™ä½¿ç”¨DETOURæ–¹å¼!
 
     const int32_t threadId = ThreadGetCurrentId();
-    g_Counter              = 0;
+    const int32_t flags    = sm_transmit_debug_profiler.GetInt();
+    const auto prof = std::chrono::high_resolution_clock::now();
+
+#ifdef SHOOK
+    g_Counter = 0;
+#endif
 
     AssertNullptr(pInfo->m_pClientEnt);
 
+#ifdef SHOOK
     TLOCK;
     RLOCK;
+#endif
 
     CALL_CHECK;
 
@@ -273,14 +291,29 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
     }
     else if (sm_transmit_debug_profiler.GetInt() & DEBUG_PROFILER_PRINT_DIFF_THREAD_CALLS)
     {
+#ifdef SHOOK
         Msg("CheckTransmit(%02d) -> call (%04d) in mainThread = %08d | currentThread = %08d\n",
             playerhelpers->GetGamePlayer(pInfo->m_pClientEnt)->GetIndex(),
             g_Counter.load(),
             g_u64EngineThreadId,
             threadId);
+#else
+        Msg("CheckTransmit(%02d) -> call (unknown) in mainThread = %08d | currentThread = %08d\n",
+            playerhelpers->GetGamePlayer(pInfo->m_pClientEnt)->GetIndex(),
+            g_u64EngineThreadId,
+            threadId);
+#endif
     }
 
 #ifdef POST_CHECK_HOOK
+
+#    ifndef SHOOK
+    RLOCK;
+#    endif
+
+    int64_t removedEntities = 0;
+
+    const auto start  = std::chrono::high_resolution_clock::now();
     const auto client = gamehelpers->IndexOfEdict(pInfo->m_pClientEnt);
 
     edict_t* pBaseEdict = g_pGlobals->pEdicts;
@@ -290,10 +323,12 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
         const auto index  = pEdictIndices[i];
         const auto pEdict = &pBaseEdict[index];
 
+        /*
         if (pEdict->m_fStateFlags & 1 << 4) // FL_EDICT_DONTSEND
         {
             continue;
         }
+        */
 
         if (!pInfo->m_pTransmitEdict->Get(index))
         {
@@ -310,13 +345,17 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
 
         if (g_pHooks[entity] == nullptr)
         {
+            if (CheckEntityRelationShip(pEntity, entity, client, flags))
+            {
+                pInfo->m_pTransmitEdict->Clear(index);
+                removedEntities++;
+            }
             continue;
         }
 
         if (!g_pHooks[entity]->CanSee(client))
         {
-            if (pInfo->m_pTransmitEdict->Get(index))
-                pInfo->m_pTransmitEdict->Clear(index);
+            pInfo->m_pTransmitEdict->Clear(index);
             continue;
         }
 
@@ -328,22 +367,95 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
 
         if (g_pHooks[entity]->GetBlockAll())
         {
-            if (pInfo->m_pTransmitEdict->Get(index))
-                pInfo->m_pTransmitEdict->Clear(index);
+            pInfo->m_pTransmitEdict->Clear(index);
+            removedEntities++;
             continue;
         }
 
         if (owner != -1 && g_pHooks[owner] != nullptr && !g_pHooks[owner]->CanSee(client))
         {
-            if (pInfo->m_pTransmitEdict->Get(index))
-                pInfo->m_pTransmitEdict->Clear(index);
+            pInfo->m_pTransmitEdict->Clear(index);
             continue;
         }
 
         // passing
+        if (!CheckEntityRelationShip(pEntity, entity, client, flags))
+            continue;
+
+        pInfo->m_pTransmitEdict->Clear(index);
+        removedEntities++;
     }
+
+    const auto stop = std::chrono::high_resolution_clock::now();
+
+    if (flags & DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_TIME)
+    {
+        const auto post_us  = std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count();
+        const auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(stop - prof).count();
+
+        Msg("PostCheckHook(%02d) -> call %" PRIi64 "us (total " PRIi64 "us) with %" PRIi64 " entities in mainThread = %08d | currentThread = %08d\n",
+            client,
+            post_us,
+            total_us,
+            removedEntities,
+            g_u64EngineThreadId,
+            threadId);
+    }
+
 #endif
 }
+
+#ifdef POST_CHECK_HOOK
+inline bool CheckEntityRelationShip(CBaseEntity* pEntity, int entity, int client, int debugFlags)
+{
+    if (entity < SM_MAXPLAYERS)
+        return false;
+
+    const char* classname = gamehelpers->GetEntityClassname(pEntity);
+    if (!(V_strncasecmp(classname, "weapon_", 7) == 0 || V_strncasecmp(classname, "item_", 5) == 0))
+        return false;
+
+    // cleanup weapon flags
+
+    static unsigned offset = 0;
+    if (offset == 0)
+    {
+        // EHandle m_hParent;
+        sm_datatable_info_t info;
+        if (!gamehelpers->FindDataMapInfo(gamehelpers->GetDataMap(pEntity), "m_hParent", &info))
+        {
+            Error("Could not find m_hParent DataMap");
+        }
+        offset = info.actual_offset;
+    }
+
+    const auto m_hParent  = static_cast<CBaseHandle>(*(char*)(reinterpret_cast<char*>(pEntity) + offset));
+    const auto OwnerIndex = m_hParent.GetEntryIndex();
+
+    if (OwnerIndex == client || !IsEntityIndexInRange(OwnerIndex))
+        return false;
+
+    if (g_pHooks[OwnerIndex] == nullptr)
+        return false;
+
+    if (g_pHooks[OwnerIndex]->CanSee(client))
+        return false;
+
+    if (debugFlags & DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_LOGS)
+    {
+        const auto threadId = GetCurrentThreadId();
+        Msg("    CheckEntityRelationShip(%02d) -> removed<%d.%s> from %d in mainThread = %08d | currentThread = %08d\n",
+            client,
+            entity,
+            classname,
+            OwnerIndex,
+            g_u64EngineThreadId,
+            threadId);
+    }
+
+    return true;
+}
+#endif
 
 #ifdef DETOUR_TRANSMIT
 DECL_TRANSMIT_DETOUR(1)
@@ -353,6 +465,7 @@ DECL_TRANSMIT_DETOUR(4)
 DECL_TRANSMIT_DETOUR(5)
 #endif
 
+#ifdef SHOOK
 SH_DECL_MANUALHOOK2_void(SetTransmit, 0, 0, 0, CCheckTransmitInfo*, bool);
 
 void Hook_SetTransmit(CCheckTransmitInfo* pInfo, bool bAlways)
@@ -401,15 +514,14 @@ void Hook_SetTransmit(CCheckTransmitInfo* pInfo, bool bAlways)
 
     RETURN_META(MRES_IGNORED);
 }
+#endif
 
 void OnGameFrame(bool simulating)
 {
-    if (g_FrameCalls.load() > 0 && sm_transmit_debug_profiler.GetInt() & DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS && g_FrameCalls.load() > playerhelpers->GetNumPlayers() / 2)
-        Msg("Called in main thread: %d times with %d players\n", g_FrameCalls.load(), playerhelpers->GetNumPlayers());
+    if (g_FrameCalls.load() > 0 && sm_transmit_debug_profiler.GetInt() & DEBUG_PROFILER_PRINT_MAIN_THREAD_CALLS)
+        Msg("OnGameFrame(%08d) -> Detour called in main thread: %d times with %d players\n", g_pGlobals->tickcount, g_FrameCalls.load(), playerhelpers->GetNumPlayers());
 
     g_FrameCalls = 0;
-
-    g_Transmit.CheckParallel();
 }
 
 bool TransmitManager::SDK_OnMetamodLoad(ISmmAPI* ismm, char* error, size_t maxlen, bool late)
@@ -456,7 +568,10 @@ bool TransmitManager::SDK_OnLoad(char* error, size_t maxlength, bool late)
         return false;
     }
     gameconfs->CloseGameConfigFile(conf);
+
+#ifdef SHOOK
     SH_MANUALHOOK_RECONFIGURE(SetTransmit, offset, 0, 0);
+#endif
 
     CDetourManager::Init(smutils->GetScriptingEngine(), g_pGameConf);
 
@@ -487,7 +602,9 @@ bool TransmitManager::SDK_OnLoad(char* error, size_t maxlength, bool late)
     CREATE_TRANSMIT_DETOUR(5);
 #endif
 
+#ifdef SHOOK
     memset(g_nHooks, 0, sizeof(g_nHooks));
+#endif
 
     playerhelpers->AddClientListener(this);
     g_pSDKHooks->AddEntityListener(this);
@@ -497,62 +614,28 @@ bool TransmitManager::SDK_OnLoad(char* error, size_t maxlength, bool late)
     g_pShareSys->RegisterLibrary(myself, "TransmitManager");
 
     sv_parallel_send = g_pCVar->FindVar("sv_parallel_send");
-    if (sv_parallel_send != nullptr)
-    {
-        m_bParallel = sv_parallel_send->GetBool();
-    }
 
-    if (m_bParallel)
+    if (sv_parallel_send != nullptr && sv_parallel_send->GetBool())
     {
-        m_pDetour[0]->EnableDetour();
         smutils->LogMessage(myself, "Initialized as parallel mode <thread-%d>!", g_u64EngineThreadId);
 
 #if PLATFORM_WINDOWS
         const auto pThread  = GetCurrentThread();
         const auto priority = GetThreadPriority(pThread);
-        if (SetThreadPriority(pThread, THREAD_PRIORITY_TIME_CRITICAL))
-            smutils->LogMessage(myself, "Increased main thread to %d from %d", THREAD_PRIORITY_TIME_CRITICAL, priority);
+        if (SetThreadPriority(pThread, THREAD_PRIORITY_HIGHEST))
+            smutils->LogMessage(myself, "Increased main thread priority from %d to %d", priority, THREAD_PRIORITY_HIGHEST);
 #endif
     }
     else
     {
         smutils->LogMessage(myself, "Initialized as synchronization mode!");
     }
-    m_bDelayDetourDisable = false;
+
+    m_pDetour[0]->EnableDetour();
 
     smutils->AddGameFrameHook(&OnGameFrame);
 
     return true;
-}
-
-void TransmitManager::CheckParallel()
-{
-    if (sv_parallel_send == nullptr)
-        return;
-
-    TLOCK;
-
-    const auto bParallel = sv_parallel_send->GetBool();
-
-    if (bParallel != m_bParallel)
-        smutils->LogMessage(myself, "switch to %s mode!", bParallel ? "parallel" : "synchronization");
-
-    m_bParallel = bParallel;
-
-    if (!m_bParallel && m_pDetour[0]->IsEnabled())
-    {
-        // NOTE Later disable
-        // If disable function while multi-threading executing
-        // server crash instantly.
-        m_bDelayDetourDisable = true;
-    }
-    else if (m_bParallel && !m_pDetour[0]->IsEnabled())
-    {
-        m_pDetour[0]->EnableDetour();
-    }
-
-    if (m_bParallel)
-        m_bDelayDetourDisable = false;
 }
 
 void TransmitManager::OnCoreMapEnd()
@@ -596,6 +679,7 @@ void TransmitManager::SDK_OnUnload()
     {
         delete hook;
     }
+#ifdef SHOOK
     for (auto& hook : g_nHooks)
     {
         if (hook)
@@ -604,6 +688,7 @@ void TransmitManager::SDK_OnUnload()
         }
         hook = 0;
     }
+#endif
 }
 
 void TransmitManager::OnEntityDestroyed(CBaseEntity* pEntity)
@@ -646,29 +731,6 @@ void TransmitManager::OnClientDisconnecting(int client)
     UnhookEntity(client);
 }
 
-void TransmitManager::OnClientDisconnected(int client)
-{
-    if (!m_bDelayDetourDisable)
-        return;
-
-    // check if no any client connected
-
-    for (auto i = 1; i <= playerhelpers->GetMaxClients(); i++)
-    {
-        const auto pPlayer = playerhelpers->GetGamePlayer(i);
-        if (pPlayer == nullptr || !pPlayer->IsInGame())
-            continue;
-
-        // found in-game client
-        return;
-    }
-
-    if (m_pDetour[0]->IsEnabled())
-        m_pDetour[0]->DisableDetour();
-
-    m_bDelayDetourDisable = false;
-}
-
 void TransmitManager::HookEntity(CBaseEntity* pEntity, bool defaultTransmit)
 {
     // NOTE lock is not needed because call from native only!!!
@@ -689,7 +751,10 @@ void TransmitManager::HookEntity(CBaseEntity* pEntity, bool defaultTransmit)
     }
 
     g_pHooks[index] = new CHook(pEntity, defaultTransmit);
+
+#ifdef SHOOK
     g_nHooks[index] = SH_ADD_MANUALHOOK(SetTransmit, pEntity, SH_STATIC(&Hook_SetTransmit), false);
+#endif
 
 #ifdef TRACE
     Msg("Hooked Entity (%d, %s)\n", index, BOOLEAN(defaultTransmit));
@@ -714,11 +779,13 @@ void TransmitManager::UnhookEntity(int index)
     delete g_pHooks[index];
     g_pHooks[index] = nullptr;
 
+#ifdef SHOOK
     if (g_nHooks[index])
     {
         SH_REMOVE_HOOK_ID(g_nHooks[index]);
     }
     g_nHooks[index] = 0;
+#endif
 
 #ifdef TRACE
     Msg("UnHooked Entity(%d)\n", index);

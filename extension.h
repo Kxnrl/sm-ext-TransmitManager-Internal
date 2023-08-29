@@ -23,16 +23,12 @@ public:
     // player listener
     void OnClientPutInServer(int client) override;
     void OnClientDisconnecting(int client) override;
-    void OnClientDisconnected(int client) override;
 
     // method
     void HookEntity(CBaseEntity* pEntity, bool defaultTransmit);
     void UnhookEntity(int index);
-    void CheckParallel();
 
 private:
-    bool     m_bParallel;
-    bool     m_bDelayDetourDisable;
     ConVar*  sv_parallel_send = nullptr;
     CDetour* m_pDetour[6]     = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 };
