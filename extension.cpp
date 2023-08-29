@@ -3,6 +3,8 @@
 #include "ISDKHooks.h"
 #include "macro.h"
 
+#include <atomic>
+#include <mutex>
 #include <shared_mutex>
 
 // #define DEBUG
@@ -17,8 +19,6 @@ constexpr int DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_LOGS = 1 << 3;
 
 constexpr int MAX_CHANNEL = 5;
 
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define CLAMP(x, low, high) (MIN((MAX((x), (low))), (high)))
 #define BOOLEAN(v) (v ? "true" : "false")
 
@@ -73,6 +73,14 @@ ConVar               sm_transmit_debug_profiler("sm_transmit_debug_profiler", "0
 #define TLOCK \
     thread_guard tlock(g_MutexTread)
 
+inline char* DumpString(const char* pOriginal)
+{
+    int  nLen    = V_strlen(pOriginal);
+    auto pResult = new char[nLen + 1];
+    V_memcpy(pResult, pOriginal, nLen + 1);
+    return pResult;
+}
+
 class CHook
 {
 public:
@@ -82,7 +90,7 @@ public:
         m_nOwnerEntity(-1),
         m_bDefaultTransmit(defaultTransmit),
         m_bBlockAll(false),
-        m_pszClassname(V_strdup(gamehelpers->GetEntityClassname(pEntity)))
+        m_pszClassname(DumpString(gamehelpers->GetEntityClassname(pEntity)))
     {
         // for css, sourceTV is 65
         for (auto i = 0; i <= SM_MAXPLAYERS; i++)
@@ -270,7 +278,7 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
 
     const int32_t threadId = ThreadGetCurrentId();
     const int32_t flags    = sm_transmit_debug_profiler.GetInt();
-    const auto prof = std::chrono::high_resolution_clock::now();
+    const auto    prof     = std::chrono::high_resolution_clock::now();
 
 #ifdef SHOOK
     g_Counter = 0;
@@ -356,6 +364,7 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
         if (!g_pHooks[entity]->CanSee(client))
         {
             pInfo->m_pTransmitEdict->Clear(index);
+            removedEntities++;
             continue;
         }
 
@@ -375,6 +384,7 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
         if (owner != -1 && g_pHooks[owner] != nullptr && !g_pHooks[owner]->CanSee(client))
         {
             pInfo->m_pTransmitEdict->Clear(index);
+            removedEntities++;
             continue;
         }
 
@@ -443,7 +453,7 @@ inline bool CheckEntityRelationShip(CBaseEntity* pEntity, int entity, int client
 
     if (debugFlags & DEBUG_PROFILER_PRINT_POST_CHECK_HOOK_LOGS)
     {
-        const auto threadId = GetCurrentThreadId();
+        const auto threadId = ThreadGetCurrentId();
         Msg("    CheckEntityRelationShip(%02d) -> removed<%d.%s> from %d in mainThread = %08d | currentThread = %08d\n",
             client,
             entity,

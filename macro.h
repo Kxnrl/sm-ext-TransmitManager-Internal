@@ -75,4 +75,4 @@
         (pInfo, bAlways);                                                                                                                     \
     }
 
-#endif _INCLUDE_MACRO_PROPER_H_
+#endif // _INCLUDE_MACRO_PROPER_H_
