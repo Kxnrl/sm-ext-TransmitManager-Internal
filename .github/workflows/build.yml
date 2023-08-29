@@ -1,8 +1,8 @@
 name: Build
 
-on:
-  push:
-    branches: [ master ]
+on: [push]
+# push:
+# branches: [ master ]
 
 jobs:
   build:
@@ -25,12 +25,12 @@ jobs:
     steps:
 
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v3
         with:
           python-version: 3.9
 
       - name: Checkout AMBuild
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: alliedmodders/ambuild
           path: ambuild
@@ -70,14 +70,14 @@ jobs:
           )
 
       - name: Checkout MetaMod
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
             repository: alliedmodders/metamod-source
             path: metamod-source
             submodules: recursive
 
       - name: Checkout SourceMod
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: alliedmodders/sourcemod
           ref: 1.11-dev
@@ -85,21 +85,21 @@ jobs:
           submodules: recursive
 
       - name: Checkout hl2sdk-csgo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: alliedmodders/hl2sdk
           ref: csgo
           path: hl2sdk-csgo
 
       - name: Checkout hl2sdk-insurgency
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: alliedmodders/hl2sdk
           ref: insurgency
           path: hl2sdk-insurgency
 
       - name: Checkout Project
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: 99999
           path: extension

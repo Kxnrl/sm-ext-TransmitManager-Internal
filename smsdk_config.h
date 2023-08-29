@@ -1,14 +1,14 @@
 #ifndef _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
 #define _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
 
-#define SMEXT_CONF_NAME "Transmit Manager"
-#define SMEXT_CONF_DESCRIPTION ""
-#define SMEXT_CONF_VERSION "2.0"
-#define SMEXT_CONF_AUTHOR "Kyle \"Kxnrl\" Frankiss"
-#define SMEXT_CONF_URL "https://www.kxnrl.com"
-#define SMEXT_CONF_LOGTAG "TransmitManager"
-#define SMEXT_CONF_LICENSE "GPL"
-#define SMEXT_CONF_DATESTRING __DATE__
+#define SMEXT_CONF_NAME         "Transmit Manager (Parallel)"
+#define SMEXT_CONF_DESCRIPTION  ""
+#define SMEXT_CONF_VERSION      "2.0"
+#define SMEXT_CONF_AUTHOR       "Kyle \"Kxnrl\" Frankiss"
+#define SMEXT_CONF_URL          "https://www.kxnrl.com"
+#define SMEXT_CONF_LOGTAG       "TransmitManager"
+#define SMEXT_CONF_LICENSE      "GPL"
+#define SMEXT_CONF_DATESTRING   __DATE__
 
 #define SMEXT_LINK(name) SDKExtension* g_pExtensionIface = name;
 
