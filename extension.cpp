@@ -346,7 +346,7 @@ DETOUR_DECL_MEMBER3(DETOUR_CheckTransmit, void, CCheckTransmitInfo*, pInfo, cons
         const auto pEntity = g_pGameEnt->EdictToBaseEntity(pEdict);
         const auto entity  = gamehelpers->EntityToBCompatRef(pEntity);
 
-        if (!IsEntityIndexInRange(entity))
+        if (!IsEntityIndexInRange(entity) || entity == client)
         {
             continue;
         }
